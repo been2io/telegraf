@@ -16,6 +16,9 @@ import (
 	"github.com/influxdata/telegraf/internal/errchan"
 	"github.com/influxdata/telegraf/internal/limiter"
 	"github.com/influxdata/telegraf/plugins/inputs"
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/patrickmn/go-cache"
+	"log"
 )
 
 type (
@@ -35,6 +38,8 @@ type (
 		CacheTTL    internal.Duration `toml:"cache_ttl"`
 		client      cloudwatchClient
 		metricCache *MetricCache
+		ecc         ec2Client
+		tagsCache *cache.Cache
 	}
 
 	Metric struct {
@@ -56,6 +61,9 @@ type (
 	cloudwatchClient interface {
 		ListMetrics(*cloudwatch.ListMetricsInput) (*cloudwatch.ListMetricsOutput, error)
 		GetMetricStatistics(*cloudwatch.GetMetricStatisticsInput) (*cloudwatch.GetMetricStatisticsOutput, error)
+	}
+	ec2Client interface {
+		DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error)
 	}
 )
 
@@ -216,7 +224,36 @@ func (c *CloudWatch) initializeCloudWatch() error {
 	configProvider := credentialConfig.Credentials()
 
 	c.client = cloudwatch.New(configProvider)
+	c.ecc =ec2.New(configProvider)
+	if c.Namespace == "AWS/EC2"{
+		c.tagsCache = cache.New(24*time.Hour, 10*time.Minute)
+		c.fetchEc2Tags()
+		go c.fetchEc2TagsInBackgroud()
+	}
 	return nil
+}
+
+func (c *CloudWatch)fetchEc2TagsInBackgroud()  {
+	ticker:=time.NewTicker(5*time.Minute)
+	log.Printf("set timer to fetch ec2 tags \n")
+	for t:=range ticker.C {
+		c.fetchEc2Tags()
+		log.Printf("fetch tags at %v\n",t)
+	}
+}
+func (c *CloudWatch)fetchEc2Tags (){
+	resp,err:=c.ecc.DescribeInstances(nil)
+	if err!=nil{
+		fmt.Println(err)
+	}
+	counter:=0
+	for idx, _ := range resp.Reservations {
+		for _, inst := range resp.Reservations[idx].Instances {
+			c.tagsCache.SetDefault(*inst.InstanceId,inst.Tags)
+			counter++
+		}
+	}
+	log.Printf("fetch %v tags total %v\n",counter,c.tagsCache.ItemCount())
 }
 
 /*
@@ -284,7 +321,20 @@ func (c *CloudWatch) gatherMetric(
 		for _, d := range metric.Dimensions {
 			tags[snakeCase(*d.Name)] = *d.Value
 		}
+		if *metric.Namespace == "AWS/EC2"{
+			if v,ok:=tags[snakeCase("InstanceId")];ok{
+				if c.tagsCache!=nil{
+					if v,ok:=c.tagsCache.Get(v);ok{
+						if ts,ok:=v.([]*ec2.Tag);ok{
+							for _,t :=range ts{
+								tags[*t.Key]=*t.Value
+							}
+						}
+					}
 
+				}
+			}
+		}
 		// record field for each statistic
 		fields := map[string]interface{}{}
 

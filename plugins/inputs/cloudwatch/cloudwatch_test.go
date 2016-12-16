@@ -9,6 +9,9 @@ import (
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/testutil"
 	"github.com/stretchr/testify/assert"
+	"os"
+
+	"log"
 )
 
 type mockCloudWatchClient struct{}
@@ -129,3 +132,35 @@ func TestMetricsCacheTimeout(t *testing.T) {
 	time.Sleep(ttl)
 	assert.False(t, cache.IsValid())
 }
+
+func TestEcc(t *testing.T) {
+	region := os.Getenv("region")
+	namespace := "AWS/ElastiCache"
+	key :=os.Getenv("access_key")
+	secret := os.Getenv("secret_key")
+	internalDuration := internal.Duration{
+		Duration: 10*time.Minute,
+	}
+	c := &CloudWatch{
+		Region:    region,
+		Namespace: namespace,
+		AccessKey:key,
+		SecretKey:secret,
+		Delay:internalDuration,
+		Period:internalDuration,
+
+	}
+	println(namespace)
+	c.initializeCloudWatch()
+	log.Println("after init")
+	var acc testutil.Accumulator
+
+	c.Gather(&acc)
+}
+func TestApi(t *testing.T) {
+
+
+
+}
+
+
