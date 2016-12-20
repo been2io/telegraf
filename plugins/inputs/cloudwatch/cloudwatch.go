@@ -242,6 +242,7 @@ func (c *CloudWatch)fetchEc2TagsInBackgroud()  {
 	}
 }
 func (c *CloudWatch)fetchEc2Tags (){
+	log.Println("start to fetch tags")
 	resp,err:=c.ecc.DescribeInstances(nil)
 	if err!=nil{
 		fmt.Println(err)
@@ -327,7 +328,17 @@ func (c *CloudWatch) gatherMetric(
 					if v,ok:=c.tagsCache.Get(v);ok{
 						if ts,ok:=v.([]*ec2.Tag);ok{
 							for _,t :=range ts{
-								tags[*t.Key]=*t.Value
+								key :=*t.Key
+								if key == "Name"{
+									value:=*t.Value
+									indx:=strings.LastIndex(value,"_")
+									if indx >= 0{
+										pool := value[0:indx]
+										tags["pool"]=pool
+									}
+
+								}
+								tags[key]=*t.Value
 							}
 						}
 					}
