@@ -134,6 +134,7 @@ func (c *CloudWatch) Gather(acc telegraf.Accumulator) error {
 		for _, m := range c.Metrics {
 			log.Println(m.MetricNames)
 			if !hasWilcard(m.Dimensions) {
+				log.Println(m.Dimensions)
 				dimensions := make([]*cloudwatch.Dimension, len(m.Dimensions))
 				for k, d := range m.Dimensions {
 					fmt.Printf("Dimension [%s]:[%s]\n", d.Name, d.Value)
@@ -184,7 +185,7 @@ func (c *CloudWatch) Gather(acc telegraf.Accumulator) error {
 	// limit concurrency or we can easily exhaust user connection limit
 	// see cloudwatch API request limits:
 	// http://docs.aws.amazon.com/AmazonCloudWatch/latest/DeveloperGuide/cloudwatch_limits.html
-	lmtr := limiter.NewRateLimiter(10, time.Second)
+	lmtr := limiter.NewRateLimiter(100, time.Second)
 	defer lmtr.Stop()
 	var wg sync.WaitGroup
 	wg.Add(len(metrics))
