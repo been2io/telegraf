@@ -17,8 +17,8 @@ import (
 	"github.com/influxdata/telegraf/internal/limiter"
 	"github.com/influxdata/telegraf/plugins/inputs"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/patrickmn/go-cache"
 	"log"
+	"github.com/hashicorp/golang-lru"
 )
 
 type (
@@ -39,7 +39,7 @@ type (
 		client      cloudwatchClient
 		metricCache *MetricCache
 		ecc         ec2Client
-		tagsCache *cache.Cache
+		tagsCache   *lru.Cache
 	}
 
 	Metric struct {
@@ -132,6 +132,7 @@ func (c *CloudWatch) Gather(acc telegraf.Accumulator) error {
 	if c.Metrics != nil {
 		metrics = []*cloudwatch.Metric{}
 		for _, m := range c.Metrics {
+			log.Println(m.MetricNames)
 			if !hasWilcard(m.Dimensions) {
 				dimensions := make([]*cloudwatch.Dimension, len(m.Dimensions))
 				for k, d := range m.Dimensions {
@@ -226,7 +227,12 @@ func (c *CloudWatch) initializeCloudWatch() error {
 	c.client = cloudwatch.New(configProvider)
 	c.ecc =ec2.New(configProvider)
 	if c.Namespace == "AWS/EC2"{
-		c.tagsCache = cache.New(24*time.Hour, 10*time.Minute)
+		cacheSize := 100000
+		cache,err := lru.New(cacheSize)
+		if err!=nil{
+			panic(err)
+		}
+		c.tagsCache = cache
 		c.fetchEc2Tags()
 		go c.fetchEc2TagsInBackgroud()
 	}
@@ -250,11 +256,11 @@ func (c *CloudWatch)fetchEc2Tags (){
 	counter:=0
 	for idx, _ := range resp.Reservations {
 		for _, inst := range resp.Reservations[idx].Instances {
-			c.tagsCache.SetDefault(*inst.InstanceId,inst.Tags)
+			c.tagsCache.Add(*inst.InstanceId,inst.Tags)
 			counter++
 		}
 	}
-	log.Printf("fetch %v tags total %v\n",counter,c.tagsCache.ItemCount())
+	log.Printf("fetch %v tags total %v\n",counter,c.tagsCache.Len())
 }
 
 /*
