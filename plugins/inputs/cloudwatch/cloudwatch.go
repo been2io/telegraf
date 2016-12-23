@@ -16,6 +16,9 @@ import (
 	"github.com/influxdata/telegraf/internal/errchan"
 	"github.com/influxdata/telegraf/internal/limiter"
 	"github.com/influxdata/telegraf/plugins/inputs"
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"log"
+	"github.com/hashicorp/golang-lru"
 )
 
 type (
@@ -36,6 +39,8 @@ type (
 		RateLimit   int               `toml:"ratelimit"`
 		client      cloudwatchClient
 		metricCache *MetricCache
+		ecc         ec2Client
+		tagsCache   *lru.Cache
 	}
 
 	Metric struct {
@@ -57,6 +62,9 @@ type (
 	cloudwatchClient interface {
 		ListMetrics(*cloudwatch.ListMetricsInput) (*cloudwatch.ListMetricsOutput, error)
 		GetMetricStatistics(*cloudwatch.GetMetricStatisticsInput) (*cloudwatch.GetMetricStatisticsOutput, error)
+	}
+	ec2Client interface {
+		DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error)
 	}
 )
 
@@ -137,7 +145,9 @@ func (c *CloudWatch) Gather(acc telegraf.Accumulator) error {
 	if c.Metrics != nil {
 		metrics = []*cloudwatch.Metric{}
 		for _, m := range c.Metrics {
+			log.Println(m.MetricNames)
 			if !hasWilcard(m.Dimensions) {
+				log.Println(m.Dimensions)
 				dimensions := make([]*cloudwatch.Dimension, len(m.Dimensions))
 				for k, d := range m.Dimensions {
 					dimensions[k] = &cloudwatch.Dimension{
@@ -229,7 +239,42 @@ func (c *CloudWatch) initializeCloudWatch() error {
 	configProvider := credentialConfig.Credentials()
 
 	c.client = cloudwatch.New(configProvider)
+	c.ecc =ec2.New(configProvider)
+	if c.Namespace == "AWS/EC2"{
+		cacheSize := 100000
+		cache,err := lru.New(cacheSize)
+		if err!=nil{
+			panic(err)
+		}
+		c.tagsCache = cache
+		c.fetchEc2Tags()
+		go c.fetchEc2TagsInBackgroud()
+	}
 	return nil
+}
+
+func (c *CloudWatch)fetchEc2TagsInBackgroud()  {
+	ticker:=time.NewTicker(5*time.Minute)
+	log.Printf("set timer to fetch ec2 tags \n")
+	for t:=range ticker.C {
+		c.fetchEc2Tags()
+		log.Printf("fetch tags at %v\n",t)
+	}
+}
+func (c *CloudWatch)fetchEc2Tags (){
+	log.Println("start to fetch tags")
+	resp,err:=c.ecc.DescribeInstances(nil)
+	if err!=nil{
+		fmt.Println(err)
+	}
+	counter:=0
+	for idx, _ := range resp.Reservations {
+		for _, inst := range resp.Reservations[idx].Instances {
+			c.tagsCache.Add(*inst.InstanceId,inst.Tags)
+			counter++
+		}
+	}
+	log.Printf("fetch %v tags total %v\n",counter,c.tagsCache.Len())
 }
 
 /*
@@ -296,7 +341,30 @@ func (c *CloudWatch) gatherMetric(
 		for _, d := range metric.Dimensions {
 			tags[snakeCase(*d.Name)] = *d.Value
 		}
+		if *metric.Namespace == "AWS/EC2"{
+			if v,ok:=tags[snakeCase("InstanceId")];ok{
+				if c.tagsCache!=nil{
+					if v,ok:=c.tagsCache.Get(v);ok{
+						if ts,ok:=v.([]*ec2.Tag);ok{
+							for _,t :=range ts{
+								key :=*t.Key
+								if key == "Name"{
+									value:=*t.Value
+									indx:=strings.LastIndex(value,"_")
+									if indx >= 0{
+										pool := value[0:indx]
+										tags["pool"]=pool
+									}
 
+								}
+								tags[key]=*t.Value
+							}
+						}
+					}
+
+				}
+			}
+		}
 		// record field for each statistic
 		fields := map[string]interface{}{}
 

@@ -109,6 +109,7 @@ continue sending logs to /var/log/telegraf/telegraf.log.
 - [#1785](https://github.com/influxdata/telegraf/pull/1785): Fix statsd no default value panic.
 
 ## v1.0 [2016-09-08]
+## v1.0 Release Candidate 1 [2016-08-23]
 
 ### Release Notes
 
